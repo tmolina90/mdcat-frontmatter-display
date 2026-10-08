@@ -170,6 +170,14 @@ Defaults to `auto`, which detects dark or light mode from the terminal, unless `
 [[emoji-option]]--emoji::
     Render GitHub-style emoji shortcodes (e.g. `:+1:`) as Unicode emoji.
 
+--show-frontmatter::
+    Display leading YAML (`---`) or TOML (`+++`) frontmatter before the document as a
+    syntax-highlighted code block using the active theme, retaining its delimiter lines.
+    Hidden by default. Metadata is rendered literally, without Markdown, smart punctuation,
+    emoji substitution, or inclusion in the table of contents.
++
+For example: `mdcat --show-frontmatter document.md`.
+
 -w::
 --watch::
     Watch the input file and re-render on every change.

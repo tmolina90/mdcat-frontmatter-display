@@ -8,6 +8,10 @@ Use `cargo release` to create a new release.
 
 ## [Unreleased]
 
+### Added
+- `--show-frontmatter` displays leading YAML/TOML frontmatter, including delimiter lines, as a
+  code block using the active syntax theme. Frontmatter remains hidden by default.
+
 ## [2.18.0] – 2026-10-01
 
 ### Added
