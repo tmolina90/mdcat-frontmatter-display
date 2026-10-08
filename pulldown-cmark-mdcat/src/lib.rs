@@ -174,10 +174,7 @@ pub struct Frontmatter<'a> {
 /// Return `None` for non-leading or unterminated blocks, leaving the input untouched.
 pub fn extract_frontmatter(input: &str) -> Option<Frontmatter<'_>> {
     let body = input.strip_prefix('\u{feff}').unwrap_or(input);
-    let (first_line, mut rest) = match body.find('\n') {
-        Some(i) => (&body[..i], &body[i + 1..]),
-        None => return None,
-    };
+    let (first_line, mut rest) = body.split_once('\n')?;
     let (syntax, closers): (_, &[&str]) = match first_line.trim_end() {
         "---" => ("yaml", &["---", "..."]),
         "+++" => ("toml", &["+++"]),
