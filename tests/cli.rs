@@ -36,6 +36,7 @@ mod cli {
         );
         assert!(output.stderr.is_empty());
         assert!(stdout.contains("See 'man 1 mdcat' for more information."));
+        assert!(stdout.contains("--show-frontmatter"));
     }
 
     #[test]
@@ -149,6 +150,211 @@ mod cli {
         let stdout = std::str::from_utf8(&output.stdout).unwrap();
         assert!(output.status.success());
         assert!(stdout.contains('\t'), "tab should pass through: {stdout:?}");
+    }
+
+    fn render_stdin(input: &str, args: &[&str]) -> String {
+        let mut child = cargo_mdcat()
+            .args(args)
+            .arg("-")
+            .env_remove("NO_COLOR")
+            .env("MDCAT_PAGER", "cat")
+            .env(
+                "XDG_CONFIG_HOME",
+                std::env::temp_dir().join(format!("mdcat-no-config-{}", std::process::id())),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    #[test]
+    fn frontmatter_hidden_by_default() {
+        for input in [
+            "---\ntitle: Secret\n---\n# Body\n",
+            "+++\ntitle = 'Secret'\n+++\n# Body\n",
+            "\u{feff}--- \r\ntitle: Secret\r\n...\t\r\n# Body\n",
+        ] {
+            similar_asserts::assert_eq!(
+                render_stdin(input, &["--no-colour"]),
+                render_stdin("# Body\n", &["--no-colour"])
+            );
+        }
+    }
+
+    #[test]
+    fn show_frontmatter_matches_themed_code_blocks() {
+        for (syntax, block) in [
+            ("yaml", "---\ntitle: Example\n---\n"),
+            ("yaml", "---\ntitle: Example\n...\n"),
+            ("toml", "+++\ntitle = 'Example'\n+++\n"),
+        ] {
+            for args in [
+                vec!["--no-colour"],
+                vec!["--ansi", "--theme", "dracula"],
+                vec![
+                    "--ansi",
+                    "--theme",
+                    "solarized-light",
+                    "--margin",
+                    "--columns",
+                    "30",
+                ],
+            ] {
+                let input = format!("{block}# Body\n");
+                let expected = render_stdin(&format!("```{syntax}\n{block}```\n# Body\n"), &args);
+                let mut show_args = args;
+                show_args.push("--show-frontmatter");
+                similar_asserts::assert_eq!(render_stdin(&input, &show_args), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn show_frontmatter_handles_bom_crlf_whitespace_and_eof() {
+        for (syntax, block) in [
+            ("yaml", "--- \r\ntitle: Example\r\n...\t\r\n"),
+            ("toml", "+++\t\r\ntitle = 'Example'\r\n+++ \r\n"),
+            ("yaml", "---\ntitle: Example\n---"),
+            ("toml", "+++\ntitle = 'Example'\n+++"),
+        ] {
+            for bom in ["", "\u{feff}"] {
+                let shown = render_stdin(
+                    &format!("{bom}{block}"),
+                    &["--no-colour", "--show-frontmatter"],
+                );
+                assert!(!shown.contains('\u{feff}'));
+                assert!(shown.contains("title"));
+                let lines: Vec<_> = shown
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .collect();
+                let expected: Vec<_> = block.lines().map(str::trim_end).collect();
+                let actual: Vec<_> = lines.into_iter().map(str::trim).collect();
+                assert_eq!(actual, expected, "syntax: {syntax}");
+            }
+        }
+    }
+
+    #[test]
+    fn show_frontmatter_leaves_unrecognized_input_unchanged() {
+        for input in [
+            "# Body\n",
+            "---\ntitle: Unterminated\n",
+            "+++\ntitle = 'Wrong closer'\n---\n",
+            "# Body\n\n---\ntitle: Later\n---\n",
+            " ---\ntitle: Indented\n---\n",
+        ] {
+            similar_asserts::assert_eq!(
+                render_stdin(input, &["--no-colour", "--show-frontmatter"]),
+                render_stdin(input, &["--no-colour"])
+            );
+        }
+    }
+
+    #[test]
+    fn show_frontmatter_is_literal_and_excluded_from_toc() {
+        let block = "---\n# Metadata heading\ntext: \"*literal* -- ... :smile:\"\ncode: ```\nindent:\tvalue\n---\n";
+        let body = "# Body\n\n\"body\" -- ... :smile:\n";
+        let args = [
+            "--no-colour",
+            "--smart-punctuation",
+            "--emoji",
+            "--tabs",
+            "4",
+            "--margin",
+        ];
+        let expected = render_stdin(&format!("````yaml\n{block}````\n{body}"), &args);
+        let mut show_args = args.to_vec();
+        show_args.push("--show-frontmatter");
+        let shown = render_stdin(&format!("{block}{body}"), &show_args);
+        similar_asserts::assert_eq!(&shown, &expected);
+        assert_eq!(shown.matches("Metadata heading").count(), 1);
+        assert!(shown.contains("*literal* -- ... :smile:"));
+        assert!(shown.contains("“body” – … 😄"));
+        assert!(!shown.contains('\t'));
+        show_args.push("--toc");
+        let shown = render_stdin(&format!("{block}{body}"), &show_args);
+        assert_eq!(shown.matches("Metadata heading").count(), 1);
+        assert!(shown.find("Metadata heading").unwrap() < shown.find("Table of Contents").unwrap());
+        let mut body_args = args.to_vec();
+        body_args.push("--toc");
+        similar_asserts::assert_eq!(
+            &shown[shown.find("Table of Contents").unwrap()..],
+            render_stdin(body, &body_args).trim_start()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn show_frontmatter_works_with_pagination() {
+        let block = "+++\ntitle = 'Example'\n+++\n";
+        similar_asserts::assert_eq!(
+            render_stdin(
+                &format!("{block}# Body\n"),
+                &["--no-colour", "--paginate", "--show-frontmatter"]
+            ),
+            render_stdin(
+                &format!("```toml\n{block}```\n# Body\n"),
+                &["--no-colour", "--paginate"]
+            )
+        );
+    }
+
+    #[test]
+    fn show_frontmatter_preserves_relative_resources() {
+        let dir = std::env::temp_dir().join(format!(
+            "mdcat-frontmatter-resources-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sample/rust-logo-128x128.png"),
+            dir.join("image.png"),
+        )
+        .unwrap();
+        let file = dir.join("document.md");
+        let block = "---\ntitle: Example\n---\n";
+        let body = "# Body\n\n[relative](other.md)\n\n![image](image.png)\n";
+        let render = |input: &str, show: bool| {
+            std::fs::write(&file, input).unwrap();
+            let mut cmd = cargo_mdcat();
+            cmd.args(["--ansi", "--theme", "dracula", "--image-protocol", "kitty"]);
+            if show {
+                cmd.arg("--show-frontmatter");
+            }
+            let output = cmd.arg(&file).env_remove("NO_COLOR").output().unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let shown = render(&format!("{block}{body}"), true);
+        let expected = render(&format!("```yaml\n{block}```\n{body}"), false);
+        std::fs::remove_dir_all(&dir).unwrap();
+        similar_asserts::assert_eq!(&shown, &expected);
+        assert!(shown.contains("\x1b_G"), "relative image must still load");
+        assert!(shown.contains("other.md"));
+    }
+
+    #[test]
+    fn show_frontmatter_parses_with_watch() {
+        let output = run_cargo_mdcat(["--watch", "--show-frontmatter", "sample/common-mark.md"]);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr)
+            .contains("--watch requires standard output to be a terminal"));
     }
 
     fn image_markdown() -> String {

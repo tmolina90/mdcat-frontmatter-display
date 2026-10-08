@@ -366,6 +366,7 @@ fn main() {
         emoji,
         toc,
         tabs,
+        show_frontmatter: args.show_frontmatter,
     };
 
     // lessi handles kitty/sixel image escapes without corrupting scrollback (see GH-45),

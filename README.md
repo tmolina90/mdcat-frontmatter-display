@@ -35,8 +35,12 @@ Then it
   and lets you fully customise colours, heading markers, and GFM alert icons/labels via
   `~/.config/mdcat/config.toml` (see [config.toml.example](./config.toml.example)),
 - can render typographic punctuation (curly quotes, en/em dashes, an ellipsis) with `--smart-punctuation`,
+- can display leading YAML/TOML frontmatter with `--show-frontmatter`, using the active theme's
+  code-block highlighting and preserving delimiter lines (hidden by default),
 - can watch a file and re-render it on every save with `--watch`, for a live preview while editing,
 - can fuzzy-find a Markdown file to render, via `mdpick` (see below), if you have [fzf] installed.
+
+For example, `mdcat --show-frontmatter document.md` shows metadata before the rendered body.
 
 | Terminal                               | Basic syntax | Syntax highlighting | Images | Math  | Jump marks |
 | :------------------------------------- | :----------: | :-----------------: | :----: | :---: | :--------: |

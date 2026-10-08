@@ -155,15 +155,33 @@ pub fn markdown_options(smart_punctuation: bool) -> Options {
 /// byte order mark and trailing whitespace on the delimiter lines are ignored. If no valid
 /// frontmatter block is found, return the input unchanged.
 pub fn strip_frontmatter(input: &str) -> &str {
+    extract_frontmatter(input).map_or(input, |frontmatter| frontmatter.body)
+}
+
+/// A recognized leading YAML or TOML frontmatter block.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Frontmatter<'a> {
+    /// The syntax token (`yaml` or `toml`) for code-block highlighting.
+    pub syntax: &'static str,
+    /// The original block, including delimiter lines but excluding a leading byte order mark.
+    pub text: &'a str,
+    /// The Markdown body following the closing delimiter.
+    pub body: &'a str,
+}
+
+/// Extract frontmatter using the same recognition rules as [`strip_frontmatter`].
+///
+/// Return `None` for non-leading or unterminated blocks, leaving the input untouched.
+pub fn extract_frontmatter(input: &str) -> Option<Frontmatter<'_>> {
     let body = input.strip_prefix('\u{feff}').unwrap_or(input);
     let (first_line, mut rest) = match body.find('\n') {
         Some(i) => (&body[..i], &body[i + 1..]),
-        None => return input,
+        None => return None,
     };
-    let closers: &[&str] = match first_line.trim_end() {
-        "---" => &["---", "..."],
-        "+++" => &["+++"],
-        _ => return input,
+    let (syntax, closers): (_, &[&str]) = match first_line.trim_end() {
+        "---" => ("yaml", &["---", "..."]),
+        "+++" => ("toml", &["+++"]),
+        _ => return None,
     };
 
     while !rest.is_empty() {
@@ -172,12 +190,16 @@ pub fn strip_frontmatter(input: &str) -> &str {
             None => (rest, ""),
         };
         if closers.contains(&line.trim_end()) {
-            return next;
+            return Some(Frontmatter {
+                syntax,
+                text: &body[..body.len() - next.len()],
+                body: next,
+            });
         }
         rest = next;
     }
 
-    input
+    None
 }
 
 /// Expand literal tab characters in `input` to spaces, using a tab stop width of `tab_width`.
@@ -352,6 +374,44 @@ mod tests {
     #[test]
     fn strip_frontmatter_closing_delimiter_at_eof() {
         assert_eq!(strip_frontmatter("---\na: 1\n---"), "");
+    }
+
+    #[test]
+    fn extract_frontmatter_preserves_delimiters_and_body() {
+        for (syntax, text, body) in [
+            ("yaml", "---\na: 1\n---\n", "# Body\n"),
+            ("yaml", "---\na: 1\n...", ""),
+            ("toml", "+++\na = 1\n+++", ""),
+            ("yaml", "--- \r\na: 1\r\n...\t\r\n", "# Body\r\n"),
+            ("toml", "+++\t\r\na = 1\r\n+++ \r\n", "# Body\r\n"),
+            ("yaml", "---\n---", ""),
+        ] {
+            let input = format!("{text}{body}");
+            let expected = Frontmatter { syntax, text, body };
+            assert_eq!(extract_frontmatter(&input), Some(expected));
+            assert_eq!(strip_frontmatter(&input), body);
+            let with_bom = format!("\u{feff}{input}");
+            assert_eq!(extract_frontmatter(&with_bom).unwrap().text, text);
+            assert_eq!(strip_frontmatter(&with_bom), body);
+        }
+    }
+
+    #[test]
+    fn extract_frontmatter_rejects_non_leading_or_unterminated_blocks() {
+        for input in [
+            "",
+            "---",
+            "+++",
+            "---\na: 1\n",
+            "+++\na = 1\n---\n",
+            "---\na: 1\n+++\n",
+            "# Body\n---\na: 1\n---\n",
+            "\n---\na: 1\n---\n",
+            " ---\na: 1\n---\n",
+        ] {
+            assert_eq!(extract_frontmatter(input), None);
+            assert_eq!(strip_frontmatter(input), input);
+        }
     }
 
     #[test]

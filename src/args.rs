@@ -222,6 +222,9 @@ pub struct CommonArgs {
     /// `~/.config/mdcat/config.toml`.
     #[arg(long)]
     pub emoji: bool,
+    /// Show leading YAML/TOML frontmatter as a syntax-highlighted code block. Hidden by default.
+    #[arg(long)]
+    pub show_frontmatter: bool,
     /// Print a sample rendered with every built-in theme, to help pick one, and exit.
     #[arg(long)]
     pub list_themes: bool,

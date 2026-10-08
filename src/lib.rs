@@ -18,12 +18,12 @@ use std::io::{self, prelude::*, BufWriter};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use pulldown_cmark::Parser;
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use pulldown_cmark_mdcat::resources::{
     DispatchingResourceHandler, FileResourceHandler, ResourceUrlHandler,
 };
 use pulldown_cmark_mdcat::{
-    expand_tabs, markdown_options, strip_frontmatter, substitute_emoji, Environment, Settings,
+    expand_tabs, extract_frontmatter, markdown_options, substitute_emoji, Environment, Settings,
 };
 use resources::CurlResourceHandler;
 use tracing::{event, instrument, Level};
@@ -138,6 +138,8 @@ pub struct RenderOptions {
     /// If `Some`, expand literal tabs in the input to spaces using that tab stop width before
     /// parsing (see [`pulldown_cmark_mdcat::expand_tabs`]).
     pub tabs: Option<u16>,
+    /// Display leading YAML/TOML frontmatter as a syntax-highlighted code block.
+    pub show_frontmatter: bool,
 }
 
 /// Process a single file.
@@ -152,7 +154,10 @@ pub fn process_file(
     render_options: RenderOptions,
 ) -> Result<()> {
     let (base_dir, input) = read_input(filename)?;
-    let input = strip_frontmatter(&input);
+    let frontmatter = extract_frontmatter(&input);
+    let input = frontmatter
+        .as_ref()
+        .map_or(input.as_str(), |block| block.body);
     let input = match render_options.tabs {
         Some(tab_width) => expand_tabs(input, tab_width),
         None => std::borrow::Cow::Borrowed(input),
@@ -176,8 +181,22 @@ pub fn process_file(
     } else {
         Vec::new()
     };
-    let parser = toc_events
+    let frontmatter_events = frontmatter
+        .filter(|_| render_options.show_frontmatter)
         .into_iter()
+        .flat_map(|block| {
+            let text = match render_options.tabs {
+                Some(tab_width) => expand_tabs(block.text, tab_width),
+                None => std::borrow::Cow::Borrowed(block.text),
+            };
+            [
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(block.syntax.into()))),
+                Event::Text(text.into()),
+                Event::End(TagEnd::CodeBlock),
+            ]
+        });
+    let parser = frontmatter_events
+        .chain(toc_events)
         .chain(Parser::new_ext(input, options));
     let parser: Box<dyn Iterator<Item = pulldown_cmark::Event>> = if render_options.emoji {
         Box::new(substitute_emoji(parser))
